@@ -90,25 +90,18 @@ function deletePool(poolId) {
   return { message: 'Pool deleted successfully' };
 }
 
-async function createPool(poolData, walletFile) {
+async function createPool(poolData) {
   console.log('Received /create-pool request');
-  const { name, startTime, endTime, usageCap, whitelist } = poolData;
-  if (!name || !startTime || !endTime || !usageCap || !whitelist || !walletFile) {
-    throw new Error('Missing required fields or wallet file');
-  }
-
-  let walletData;
-  try {
-    walletData = JSON.parse(fs.readFileSync(walletFile[0].path, 'utf-8'));
-  } catch (error) {
-    throw new Error(`Invalid wallet keyfile: ${error.message}`);
-  }
-  if (!walletData.n || !walletData.d) {
-    throw new Error('Invalid Arweave JWK format');
+  const { name, startTime, endTime, usageCap, whitelist, creatorAddress } = poolData;
+  if (!name || !startTime || !endTime || !usageCap || !whitelist || !creatorAddress) {
+    throw new Error('Missing required fields');
   }
 
   const Arweave = require('arweave');
   const arweave = Arweave.init({});
+
+  // Generate new Arweave wallet
+  const walletData = await arweave.wallets.generate();
   const walletAddress = await arweave.wallets.jwkToAddress(walletData);
 
   const pools = loadPools();
@@ -124,16 +117,14 @@ async function createPool(poolData, walletFile) {
     startTime,
     endTime,
     usageCap: parseInt(usageCap),
-    walletPath, // Store the path to the wallet file
-    whitelist: JSON.parse(whitelist),
-    usage: {}
+    walletPath,
+    whitelist: Array.isArray(whitelist) ? whitelist : JSON.parse(whitelist),
+    usage: {},
+    creatorAddress // Store creator's address for access control
   };
   savePools(pools);
 
-  // Clean up uploaded wallet file
-  fs.unlinkSync(walletFile[0].path);
-
-  return { poolId, message: 'Pool created successfully', walletAddress };
+  return { poolId, message: 'Pool created successfully', walletAddress, wallet: walletData };
 }
 
 function validateEventPoolAccess(poolId, walletAddress) {

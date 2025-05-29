@@ -3,6 +3,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
+const ArweaveSignatureVerifier = require('./arweaveSignatureVerifier');
 
 // Import modules
 const poolManager = require('./poolManager');
@@ -18,6 +19,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'OPTIONS', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'X-API-Key', 'X-Event-Pool-Id']
 }));
+app.use(express.json()); // Add JSON body parser
 
 // Ensure pool_wallets directory exists
 if (!fs.existsSync(poolManager.POOL_WALLETS_DIR)) {
@@ -94,27 +96,38 @@ app.use((req, res, next) => {
   next();
 });
 
+// Middleware to filter pools by creator address
+app.use('/pools', (req, res, next) => {
+  const creatorAddress = req.query.creatorAddress;
+  if (!creatorAddress) {
+    return res.status(400).json({ error: 'Missing creatorAddress query parameter' });
+  }
+  const pools = poolManager.loadPools();
+  const filteredPools = Object.fromEntries(
+    Object.entries(pools).filter(([_, pool]) => pool.creatorAddress === creatorAddress)
+  );
+  res.json(filteredPools);
+});
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   console.log(`[${new Date().toISOString()}] Health check successful`);
   res.status(200).json({ status: 'ok' });
 });
 
-// Endpoint to list all pools
-app.get('/pools', (req, res) => {
-  try {
-    const pools = poolManager.loadPools();
-    res.json(pools);
-  } catch (error) {
-    console.error('Error fetching pools:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Endpoint to get pool balance
 app.get('/pool/:id/balance', async (req, res) => {
   try {
     const poolId = req.params.id;
+    const creatorAddress = req.query.creatorAddress;
+    const pools = poolManager.loadPools();
+    const pool = pools[poolId];
+    if (!pool) {
+      return res.status(404).json({ error: 'Pool not found' });
+    }
+    if (pool.creatorAddress !== creatorAddress) {
+      return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
+    }
     const balance = await poolManager.getPoolBalance(poolId);
     res.json({ balance });
   } catch (error) {
@@ -127,6 +140,15 @@ app.get('/pool/:id/balance', async (req, res) => {
 app.patch('/pool/:id', (req, res) => {
   try {
     const poolId = req.params.id;
+    const creatorAddress = req.query.creatorAddress;
+    const pools = poolManager.loadPools();
+    const pool = pools[poolId];
+    if (!pool) {
+      return res.status(404).json({ error: 'Pool not found' });
+    }
+    if (pool.creatorAddress !== creatorAddress) {
+      return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
+    }
     const result = poolManager.updatePool(poolId, req.body);
     res.json(result);
   } catch (error) {
@@ -139,6 +161,15 @@ app.patch('/pool/:id', (req, res) => {
 app.delete('/pool/:id', (req, res) => {
   try {
     const poolId = req.params.id;
+    const creatorAddress = req.query.creatorAddress;
+    const pools = poolManager.loadPools();
+    const pool = pools[poolId];
+    if (!pool) {
+      return res.status(404).json({ error: 'Pool not found' });
+    }
+    if (pool.creatorAddress !== creatorAddress) {
+      return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
+    }
     const result = poolManager.deletePool(poolId);
     res.json(result);
   } catch (error) {
@@ -148,22 +179,12 @@ app.delete('/pool/:id', (req, res) => {
 });
 
 // Endpoint to create a new event pool
-app.post('/create-pool', upload.fields([
-  { name: 'wallet', maxCount: 1 },
-  { name: 'name', maxCount: 1 },
-  { name: 'startTime', maxCount: 1 },
-  { name: 'endTime', maxCount: 1 },
-  { name: 'usageCap', maxCount: 1 },
-  { name: 'whitelist', maxCount: 1 }
-]), async (req, res) => {
+app.post('/create-pool', async (req, res) => {
   try {
-    const result = await poolManager.createPool(req.body, req.files.wallet);
+    const result = await poolManager.createPool(req.body);
     res.json(result);
   } catch (error) {
     console.error('Pool creation error:', error);
-    if (req.files?.wallet?.[0]?.path && fs.existsSync(req.files.wallet[0].path)) {
-      fs.unlinkSync(req.files.wallet[0].path);
-    }
     res.status(500).json({ error: error.message });
   }
 });

@@ -2,17 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const unzipper = require('unzipper');
 const crypto = require('crypto');
-const { TurboFactory, ArweaveSigner } = require('@ardrive/turbo-sdk');
+const { TurboFactory, ArweaveSigner } =require('@ardrive/turbo-sdk');
 const poolManager = require('./poolManager');
 const walletManager = require('./walletManager');
-const jwkToPem = require('jwk-to-pem');
-const arweave = require('arweave');
-
-// Calculate SHA256 hash of a file
-function calculateFileHash(filePath) {
-  const fileBuffer = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(fileBuffer).digest('hex');
-}
+const ArweaveSignatureVerifier = require('./arweaveSignatureVerifier');
 
 // Function to determine Content-Type based on file extension
 function getContentType(filePath) {
@@ -79,7 +72,7 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
     }
     const fileStreamFactory = () => fs.createReadStream(filePath);
     const fileSizeFactory = () => fs.statSync(filePath).size;
-    const hash = calculateFileHash(filePath);
+    const hash = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 
     console.log(`Uploading file: ${file.relativePath}`);
     const uploadResult = await turbo.uploadFile({
@@ -122,7 +115,7 @@ function cleanupTempFiles(tempDir, zipPath) {
 
 async function handleFileUpload(req) {
   const poolType = req.body.poolType || 'community';
-  const { eventPoolId, hash, signature, publicKey } = req.body;
+  const { eventPoolId, zipHash, signature, publicKey, walletAddress } = req.body;
   const zipPath = req.file.path;
 
   if (!req.file) {
@@ -132,35 +125,22 @@ async function handleFileUpload(req) {
   // Verify the hash matches the uploaded ZIP file
   const zipBuffer = fs.readFileSync(zipPath);
   const calculatedHash = crypto.createHash('sha256').update(zipBuffer).digest('hex');
-  if (calculatedHash !== hash) {
+  if (calculatedHash !== zipHash) {
     throw new Error('Hash mismatch');
   }
 
-  // Verify the signature using the provided public key
-  let publicKeyJwk;
-  try {
-    publicKeyJwk = JSON.parse(publicKey);
-  } catch (e) {
-    throw new Error('Invalid public key format');
-  }
-  const publicKeyPem = jwkToPem(publicKeyJwk);
-  const isValid = crypto.verify(
-    {
-      algorithm: 'sha256',
-      key: publicKeyPem,
-      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-      saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST
-    },
-    Buffer.from(hash, 'hex'),
-    Buffer.from(signature, 'base64')
-  );
-  if (!isValid) {
+  // Verify the signature using ArweaveSignatureVerifier
+  const verifier = new ArweaveSignatureVerifier();
+  const verificationResult = await verifier.verifySignatureWithPublicKey(publicKey, signature, zipHash);
+  if (!verificationResult.isValidSignature) {
     throw new Error('Invalid signature');
+  }
+  if (verificationResult.walletAddress !== walletAddress) {
+    throw new Error('Wallet address mismatch');
   }
 
   let sponsorWallet;
   let poolName = '';
-  let walletAddress = null;
 
   if (poolType === 'event') {
     if (!eventPoolId) {
@@ -176,10 +156,6 @@ async function handleFileUpload(req) {
       throw new Error('Pool is not active');
     }
     poolName = pool.name;
-
-    // Derive wallet address from provided public key
-    const arweaveInstance = arweave.init({});
-    walletAddress = await arweaveInstance.wallets.jwkToAddress(publicKeyJwk);
 
     // Check if derived address is in the whitelist
     const whitelist = pool.whitelist || [];
@@ -224,7 +200,6 @@ async function handleFileUpload(req) {
 }
 
 module.exports = {
-  calculateFileHash,
   getContentType,
   extractZipFile,
   validateUploadFiles,
