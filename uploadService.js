@@ -1,4 +1,3 @@
-
 import { createReadStream, existsSync, statSync, readFileSync, rmSync, unlinkSync, mkdirSync } from 'fs';
 import { extname, join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -9,10 +8,8 @@ import { loadPools, updatePoolUsage } from './poolManager.js';
 import { loadWalletFromPath, getRandomCommunityWallet } from './walletManager.js';
 import ArweaveSignatureVerifier from './arweaveSignatureVerifier.js';
 
-// Define __dirname for ES Modules
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Function to determine Content-Type based on file extension
 function getContentType(filePath) {
   const ext = extname(filePath).toLowerCase();
   const mimeTypes = {
@@ -73,7 +70,6 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
   const signer = new ArweaveSigner(wallet);
   const turbo = TurboFactory.authenticated({ signer, token: 'arweave' });
 
-  // Get initial balance
   let balanceResult;
   try {
     balanceResult = await turbo.getBalance();
@@ -125,7 +121,6 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
     }
   }
 
-  // Get final balance to confirm
   try {
     balanceResult = await turbo.getBalance();
   } catch (error) {
@@ -167,7 +162,6 @@ async function handleFileUpload(req) {
   const { eventPoolId, zipHash, signature, publicKey, walletAddress } = req.body;
   const zipPath = req.file ? req.file.path : null;
 
-  // Initialize tempDir early to ensure cleanup
   const tempDir = zipPath ? join(__dirname, 'temp', Date.now().toString()) : null;
   if (tempDir) {
     try {
@@ -184,14 +178,12 @@ async function handleFileUpload(req) {
       throw { code: 'NO_ZIP_FILE', message: 'No ZIP file provided' };
     }
 
-    // Verify the hash matches the uploaded ZIP file
     const zipBuffer = readFileSync(zipPath);
     const calculatedHash = createHash('sha256').update(zipBuffer).digest('hex');
     if (calculatedHash !== zipHash) {
       throw { code: 'HASH_MISMATCH', message: 'Hash mismatch' };
     }
 
-    // Verify the signature using ArweaveSignatureVerifier
     const verifier = new ArweaveSignatureVerifier();
     const verificationResult = await verifier.verifySignatureWithPublicKey(publicKey, signature, zipHash);
     if (!verificationResult.isValidSignature) {
@@ -204,6 +196,8 @@ async function handleFileUpload(req) {
     let sponsorWallet;
     let poolName = '';
     let pool;
+    let usage = null;
+    let remainingAllowance = null;
 
     if (poolType === 'event') {
       if (!eventPoolId) {
@@ -220,16 +214,17 @@ async function handleFileUpload(req) {
       }
       poolName = pool.name;
 
-      // Check if derived address is in the whitelist
       const whitelist = pool.whitelist || [];
       if (!whitelist.includes(walletAddress)) {
         throw { code: 'WALLET_NOT_WHITELISTED', message: 'Wallet address not in whitelist' };
       }
 
       sponsorWallet = loadWalletFromPath(pool.walletPath);
+      usage = pool.usage[walletAddress] || 0;
+      remainingAllowance = pool.usageCap - usage;
     } else {
-      // For community pools, use a random wallet (no whitelist check needed)
       sponsorWallet = getRandomCommunityWallet();
+      poolName = 'Community Pool';
     }
 
     console.log(`Using wallet for ${poolType} pool`);
@@ -241,18 +236,22 @@ async function handleFileUpload(req) {
     
     const result = await uploadToArweave(fileMetadata, tempDir, sponsorWallet, poolType, poolName);
     
-    // Update pool usage for event pools using actual winc spent
     if (poolType === 'event') {
-      updatePoolUsage(eventPoolId, walletAddress, Number(result.totalWincSpent) / 1e12, pool);
+      const actualWincSpent = Number(result.totalWincSpent) / 1e12;
+      updatePoolUsage(eventPoolId, walletAddress, actualWincSpent, pool);
+      usage = pool.usage[walletAddress] || actualWincSpent;
+      remainingAllowance = pool.usageCap - usage;
     }
 
     return {
       poolType,
       uploadedFiles: result.uploadedFiles,
-      poolName: poolType === 'event' ? `You have been sponsored by ${poolName}` : undefined,
+      poolName: poolType === 'event' ? `You have been sponsored by ${poolName}` : `You have been sponsored by the community pool`,
       remainingBalance: result.remainingBalance,
       equivalentFileSize: result.equivalentFileSize,
-      totalCreditsSpent: result.totalWincSpent
+      totalCreditsSpent: result.totalWincSpent,
+      usage: poolType === 'event' ? usage : undefined,
+      remainingAllowance: poolType === 'event' ? remainingAllowance : undefined
     };
   } finally {
     cleanupTempFiles(tempDir, zipPath);
