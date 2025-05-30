@@ -1,14 +1,12 @@
-const express = require('express');
-const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
-const cors = require('cors');
-const ArweaveSignatureVerifier = require('./arweaveSignatureVerifier');
+import express, { json } from 'express';
+import multer from 'multer';
+import { existsSync, mkdirSync } from 'fs';
+import cors from 'cors';
 
 // Import modules
-const poolManager = require('./poolManager');
-const walletManager = require('./walletManager');
-const uploadService = require('./uploadService');
+import { POOL_WALLETS_DIR, POOLS_FILE, loadPools, getPoolBalance, updatePool, deletePool, createPool } from './poolManager.js';
+import { SPONSOR_WALLET_DIR, uploadWallet } from './walletManager.js';
+import { handleFileUpload } from './uploadService.js';
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
@@ -19,18 +17,18 @@ app.use(cors({
   methods: ['GET', 'POST', 'OPTIONS', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'X-API-Key', 'X-Event-Pool-Id']
 }));
-app.use(express.json()); // Add JSON body parser
+app.use(json()); // Add JSON body parser
 
 // Ensure pool_wallets directory exists
-if (!fs.existsSync(poolManager.POOL_WALLETS_DIR)) {
-  fs.mkdirSync(poolManager.POOL_WALLETS_DIR, { recursive: true });
-  console.log(`Created pool wallets directory: ${poolManager.POOL_WALLETS_DIR}`);
+if (!existsSync(POOL_WALLETS_DIR)) {
+  mkdirSync(POOL_WALLETS_DIR, { recursive: true });
+  console.log(`Created pool wallets directory: ${POOL_WALLETS_DIR}`);
 }
 
 // Log directory paths at startup
-console.log(`SPONSOR_WALLET_DIR: ${walletManager.SPONSOR_WALLET_DIR}`);
-console.log(`POOLS_FILE: ${poolManager.POOLS_FILE}`);
-console.log(`POOL_WALLETS_DIR: ${poolManager.POOL_WALLETS_DIR}`);
+console.log(`SPONSOR_WALLET_DIR: ${SPONSOR_WALLET_DIR}`);
+console.log(`POOLS_FILE: ${POOLS_FILE}`);
+console.log(`POOL_WALLETS_DIR: ${POOL_WALLETS_DIR}`);
 
 // API keys
 const DEPLOY_API_KEY = 'deploy-api-key-123';
@@ -102,7 +100,7 @@ app.use('/pools', (req, res, next) => {
   if (!creatorAddress) {
     return res.status(400).json({ error: 'Missing creatorAddress query parameter' });
   }
-  const pools = poolManager.loadPools();
+  const pools = loadPools();
   const filteredPools = Object.fromEntries(
     Object.entries(pools).filter(([_, pool]) => pool.creatorAddress === creatorAddress)
   );
@@ -120,7 +118,7 @@ app.get('/pool/:id/balance', async (req, res) => {
   try {
     const poolId = req.params.id;
     const creatorAddress = req.query.creatorAddress;
-    const pools = poolManager.loadPools();
+    const pools = loadPools();
     const pool = pools[poolId];
     if (!pool) {
       return res.status(404).json({ error: 'Pool not found' });
@@ -128,7 +126,7 @@ app.get('/pool/:id/balance', async (req, res) => {
     if (pool.creatorAddress !== creatorAddress) {
       return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
     }
-    const balance = await poolManager.getPoolBalance(poolId);
+    const balance = await getPoolBalance(poolId);
     res.json({ balance });
   } catch (error) {
     console.error(`Error fetching balance for pool ${req.params.id}:`, error);
@@ -141,7 +139,7 @@ app.patch('/pool/:id', (req, res) => {
   try {
     const poolId = req.params.id;
     const creatorAddress = req.query.creatorAddress;
-    const pools = poolManager.loadPools();
+    const pools = loadPools();
     const pool = pools[poolId];
     if (!pool) {
       return res.status(404).json({ error: 'Pool not found' });
@@ -149,7 +147,7 @@ app.patch('/pool/:id', (req, res) => {
     if (pool.creatorAddress !== creatorAddress) {
       return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
     }
-    const result = poolManager.updatePool(poolId, req.body);
+    const result = updatePool(poolId, req.body);
     res.json(result);
   } catch (error) {
     console.error(`Error updating pool ${req.params.id}:`, error);
@@ -162,7 +160,7 @@ app.delete('/pool/:id', (req, res) => {
   try {
     const poolId = req.params.id;
     const creatorAddress = req.query.creatorAddress;
-    const pools = poolManager.loadPools();
+    const pools = loadPools();
     const pool = pools[poolId];
     if (!pool) {
       return res.status(404).json({ error: 'Pool not found' });
@@ -170,7 +168,7 @@ app.delete('/pool/:id', (req, res) => {
     if (pool.creatorAddress !== creatorAddress) {
       return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
     }
-    const result = poolManager.deletePool(poolId);
+    const result = deletePool(poolId);
     res.json(result);
   } catch (error) {
     console.error(`Error deleting pool ${req.params.id}:`, error);
@@ -181,7 +179,7 @@ app.delete('/pool/:id', (req, res) => {
 // Endpoint to create a new event pool
 app.post('/create-pool', async (req, res) => {
   try {
-    const result = await poolManager.createPool(req.body);
+    const result = await createPool(req.body);
     res.json(result);
   } catch (error) {
     console.error('Pool creation error:', error);
@@ -192,7 +190,7 @@ app.post('/create-pool', async (req, res) => {
 // Endpoint to receive user wallet keyfiles for community pools
 app.post('/upload-wallet', upload.single('wallet'), async (req, res) => {
   try {
-    const result = await walletManager.uploadWallet(req.file);
+    const result = await uploadWallet(req.file);
     res.json(result);
   } catch (error) {
     console.error('Wallet upload error:', error);
@@ -204,7 +202,7 @@ app.post('/upload-wallet', upload.single('wallet'), async (req, res) => {
 app.post('/upload', upload.single('zip'), async (req, res) => {
   try {
     console.log(`[${new Date().toISOString()}] Processing upload request`);
-    const result = await uploadService.handleFileUpload(req);
+    const result = await handleFileUpload(req);
     res.json(result);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Upload error:`, error);
@@ -221,8 +219,8 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 8080;
 const server = app.listen(PORT, () => {
   console.log(`Sponsor server running on port ${PORT}`);
-  console.log(`Wallet directory: ${walletManager.SPONSOR_WALLET_DIR}`);
-  console.log(`Pools file: ${poolManager.POOLS_FILE}`);
+  console.log(`Wallet directory: ${SPONSOR_WALLET_DIR}`);
+  console.log(`Pools file: ${POOLS_FILE}`);
 }).on('error', (error) => {
   console.error(`Failed to start server on port ${PORT}:`, error);
   process.exit(1);
@@ -245,4 +243,4 @@ process.on('SIGINT', () => {
   });
 });
 
-module.exports = app;
+export default app;

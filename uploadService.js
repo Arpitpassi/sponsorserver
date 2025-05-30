@@ -1,15 +1,15 @@
-const fs = require('fs');
-const path = require('path');
-const unzipper = require('unzipper');
-const crypto = require('crypto');
-const { TurboFactory, ArweaveSigner } =require('@ardrive/turbo-sdk');
-const poolManager = require('./poolManager');
-const walletManager = require('./walletManager');
-const ArweaveSignatureVerifier = require('./arweaveSignatureVerifier');
+import { createReadStream, existsSync, statSync, readFileSync, rmSync, unlinkSync, mkdirSync } from 'fs';
+import { extname, join } from 'path';
+import { Extract } from 'unzipper';
+import { createHash } from 'crypto';
+import { TurboFactory, ArweaveSigner } from '@ardrive/turbo-sdk';
+import { loadPools, updatePoolUsage } from './poolManager.js';
+import { loadWalletFromPath, getRandomCommunityWallet } from './walletManager.js';
+import ArweaveSignatureVerifier from './arweaveSignatureVerifier.js';
 
 // Function to determine Content-Type based on file extension
 function getContentType(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = extname(filePath).toLowerCase();
   const mimeTypes = {
     '.html': 'text/html',
     '.css': 'text/css',
@@ -32,8 +32,8 @@ function getContentType(filePath) {
 
 async function extractZipFile(zipPath, tempDir) {
   await new Promise((resolve, reject) => {
-    fs.createReadStream(zipPath)
-      .pipe(unzipper.Extract({ path: tempDir }))
+    createReadStream(zipPath)
+      .pipe(Extract({ path: tempDir }))
       .on('close', resolve)
       .on('error', reject);
   });
@@ -41,8 +41,8 @@ async function extractZipFile(zipPath, tempDir) {
 
 function validateUploadFiles(fileMetadata, tempDir) {
   const totalSize = fileMetadata.reduce((sum, file) => {
-    const filePath = path.join(tempDir, file.relativePath);
-    return fs.existsSync(filePath) ? sum + fs.statSync(filePath).size : sum;
+    const filePath = join(tempDir, file.relativePath);
+    return existsSync(filePath) ? sum + statSync(filePath).size : sum;
   }, 0);
 
   if (totalSize > 50 * 1024 * 1024) {
@@ -51,7 +51,7 @@ function validateUploadFiles(fileMetadata, tempDir) {
 
   const allowedExtensions = ['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg'];
   for (const file of fileMetadata) {
-    const ext = path.extname(file.relativePath).toLowerCase();
+    const ext = extname(file.relativePath).toLowerCase();
     if (!allowedExtensions.includes(ext)) {
       throw new Error(`Invalid file type: ${ext}`);
     }
@@ -66,13 +66,13 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
 
   const uploadedFiles = [];
   for (const file of fileMetadata) {
-    const filePath = path.join(tempDir, file.relativePath);
-    if (!fs.existsSync(filePath)) {
+    const filePath = join(tempDir, file.relativePath);
+    if (!existsSync(filePath)) {
       throw new Error(`File not found in zip: ${file.relativePath}`);
     }
-    const fileStreamFactory = () => fs.createReadStream(filePath);
-    const fileSizeFactory = () => fs.statSync(filePath).size;
-    const hash = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    const fileStreamFactory = () => createReadStream(filePath);
+    const fileSizeFactory = () => statSync(filePath).size;
+    const hash = createHash('sha256').update(readFileSync(filePath)).digest('hex');
 
     console.log(`Uploading file: ${file.relativePath}`);
     const uploadResult = await turbo.uploadFile({
@@ -93,7 +93,7 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
       relativePath: file.relativePath,
       txId: uploadResult.id,
       hash,
-      lastModified: fs.statSync(filePath).mtime.toISOString()
+      lastModified: statSync(filePath).mtime.toISOString()
     });
   }
 
@@ -105,11 +105,11 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
 }
 
 function cleanupTempFiles(tempDir, zipPath) {
-  if (fs.existsSync(tempDir)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  if (existsSync(tempDir)) {
+    rmSync(tempDir, { recursive: true, force: true });
   }
-  if (fs.existsSync(zipPath)) {
-    fs.unlinkSync(zipPath);
+  if (existsSync(zipPath)) {
+    unlinkSync(zipPath);
   }
 }
 
@@ -123,8 +123,8 @@ async function handleFileUpload(req) {
   }
 
   // Verify the hash matches the uploaded ZIP file
-  const zipBuffer = fs.readFileSync(zipPath);
-  const calculatedHash = crypto.createHash('sha256').update(zipBuffer).digest('hex');
+  const zipBuffer = readFileSync(zipPath);
+  const calculatedHash = createHash('sha256').update(zipBuffer).digest('hex');
   if (calculatedHash !== zipHash) {
     throw new Error('Hash mismatch');
   }
@@ -146,7 +146,7 @@ async function handleFileUpload(req) {
     if (!eventPoolId) {
       throw new Error('Event pool requires pool ID');
     }
-    const pools = poolManager.loadPools();
+    const pools = loadPools();
     const pool = pools[eventPoolId];
     if (!pool) {
       throw new Error('Invalid pool ID');
@@ -164,20 +164,20 @@ async function handleFileUpload(req) {
     }
 
     // Update pool usage
-    const totalSize = fs.statSync(zipPath).size;
+    const totalSize = statSync(zipPath).size;
     const estimatedCost = totalSize / (1024 * 1024) * 0.1;
-    poolManager.updatePoolUsage(eventPoolId, walletAddress, estimatedCost, pool);
+    updatePoolUsage(eventPoolId, walletAddress, estimatedCost, pool);
 
-    sponsorWallet = walletManager.loadWalletFromPath(pool.walletPath);
+    sponsorWallet = loadWalletFromPath(pool.walletPath);
   } else {
     // For community pools, use a random wallet (no whitelist check needed)
-    sponsorWallet = walletManager.getRandomCommunityWallet();
+    sponsorWallet = getRandomCommunityWallet();
   }
 
   console.log(`Using wallet for ${poolType} pool`);
 
-  const tempDir = path.join(__dirname, 'temp', Date.now().toString());
-  fs.mkdirSync(tempDir, { recursive: true });
+  const tempDir = join(__dirname, 'temp', Date.now().toString());
+  mkdirSync(tempDir, { recursive: true });
 
   try {
     await extractZipFile(zipPath, tempDir);
@@ -199,7 +199,7 @@ async function handleFileUpload(req) {
   }
 }
 
-module.exports = {
+export {
   getContentType,
   extractZipFile,
   validateUploadFiles,

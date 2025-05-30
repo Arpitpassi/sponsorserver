@@ -1,8 +1,10 @@
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
-const { TurboFactory, ArweaveSigner } = require('@ardrive/turbo-sdk');
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { TurboFactory, ArweaveSigner } from '@ardrive/turbo-sdk';
+import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const POOLS_FILE = path.join(__dirname, 'pools.json');
 const POOL_WALLETS_DIR = path.join(process.env.HOME, '.nitya', 'sponsor', 'pool_wallets');
 
@@ -158,7 +160,7 @@ function updatePoolUsage(poolId, walletAddress, estimatedCost, pool) {
   savePools(pools);
 }
 
-module.exports = {
+export {
   loadPools,
   savePools,
   getPoolBalance,

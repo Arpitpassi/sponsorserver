@@ -1,5 +1,6 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+
 
 const SPONSOR_DIR = path.join(process.env.HOME, '.nitya', 'sponsor');
 const SPONSOR_WALLET_DIR = path.join(SPONSOR_DIR, 'wallets');
@@ -105,7 +106,7 @@ function loadWalletFromPath(walletPath) {
   return wallet;
 }
 
-module.exports = {
+export {
   ensureSponsorDir,
   validateWalletFile,
   getWalletAddress,

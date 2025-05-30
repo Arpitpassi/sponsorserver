@@ -1,15 +1,17 @@
-const Arweave = require('arweave');
+import pkg from 'arweave';
+const { init } = pkg;
+
 
 class ArweaveSignatureVerifier {
   constructor() {
-    this.arweave = Arweave.init({
+    this.arweave = init({
       host: 'arweave.net',
       port: 443,
       protocol: 'https'
     });
   }
 
-  async verifySignatureWithPublicKey(publicKey, signature, originalHash) {
+async verifySignatureWithPublicKey(publicKey, signature, originalHash) {
     try {
       console.log('🔍 Verifying signature...');
       
@@ -42,4 +44,4 @@ class ArweaveSignatureVerifier {
   }
 }
 
-module.exports = ArweaveSignatureVerifier;
+export default ArweaveSignatureVerifier;
