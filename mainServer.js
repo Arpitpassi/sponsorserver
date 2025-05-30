@@ -63,32 +63,32 @@ app.use((req, res, next) => {
 
   if (!apiKey) {
     console.error(`[${new Date().toISOString()}] Missing API key for ${path}`);
-    return res.status(401).json({ error: 'Missing API key' });
+    return res.status(401).json({ error: 'Missing API key', code: 'MISSING_API_KEY' });
   }
 
   if (path === '/upload' && apiKey !== DEPLOY_API_KEY) {
     console.error(`[${new Date().toISOString()}] Invalid API key for upload endpoint`);
-    return res.status(401).json({ error: 'Invalid API key for upload endpoint' });
+    return res.status(401).json({ error: 'Invalid API key for upload endpoint', code: 'INVALID_API_KEY' });
   }
 
   if (path === '/upload-wallet' && apiKey !== SPONSOR_API_KEY) {
     console.error(`[${new Date().toISOString()}] Invalid API key for upload-wallet endpoint`);
-    return res.status(401).json({ error: 'Invalid API key for upload-wallet endpoint' });
+    return res.status(401).json({ error: 'Invalid API key for upload-wallet endpoint', code: 'INVALID_API_KEY' });
   }
 
   if (path === '/create-pool' && apiKey !== DEPLOY_API_KEY) {
     console.error(`[${new Date().toISOString()}] Invalid API key for create-pool endpoint`);
-    return res.status(401).json({ error: 'Invalid API key for create-pool endpoint' });
+    return res.status(401).json({ error: 'Invalid API key for create-pool endpoint', code: 'INVALID_API_KEY' });
   }
 
   if (path === '/pools' && apiKey !== DEPLOY_API_KEY) {
     console.error(`[${new Date().toISOString()}] Invalid API key for pools endpoint`);
-    return res.status(401).json({ error: 'Invalid API key for pools endpoint' });
+    return res.status(401).json({ error: 'Invalid API key for pools endpoint', code: 'INVALID_API_KEY' });
   }
 
   if (path.startsWith('/pool/') && apiKey !== DEPLOY_API_KEY) {
     console.error(`[${new Date().toISOString()}] Invalid API key for pool endpoint`);
-    return res.status(401).json({ error: 'Invalid API key for pool endpoint' });
+    return res.status(401).json({ error: 'Invalid API key for pool endpoint', code: 'INVALID_API_KEY' });
   }
 
   next();
@@ -98,7 +98,7 @@ app.use((req, res, next) => {
 app.use('/pools', (req, res, next) => {
   const creatorAddress = req.query.creatorAddress;
   if (!creatorAddress) {
-    return res.status(400).json({ error: 'Missing creatorAddress query parameter' });
+    return res.status(400).json({ error: 'Missing creatorAddress query parameter', code: 'MISSING_CREATOR_ADDRESS' });
   }
   const pools = loadPools();
   const filteredPools = Object.fromEntries(
@@ -121,16 +121,16 @@ app.get('/pool/:id/balance', async (req, res) => {
     const pools = loadPools();
     const pool = pools[poolId];
     if (!pool) {
-      return res.status(404).json({ error: 'Pool not found' });
+      return res.status(404).json({ error: 'Pool not found', code: 'POOL_NOT_FOUND' });
     }
     if (pool.creatorAddress !== creatorAddress) {
-      return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
+      return res.status(403).json({ error: 'Unauthorized: You do not own this pool', code: 'UNAUTHORIZED' });
     }
     const balance = await getPoolBalance(poolId);
     res.json({ balance });
   } catch (error) {
     console.error(`Error fetching balance for pool ${req.params.id}:`, error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
   }
 });
 
@@ -142,16 +142,16 @@ app.patch('/pool/:id', (req, res) => {
     const pools = loadPools();
     const pool = pools[poolId];
     if (!pool) {
-      return res.status(404).json({ error: 'Pool not found' });
+      return res.status(404).json({ error: 'Pool not found', code: 'POOL_NOT_FOUND' });
     }
     if (pool.creatorAddress !== creatorAddress) {
-      return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
+      return res.status(403).json({ error: 'Unauthorized: You do not own this pool', code: 'UNAUTHORIZED' });
     }
     const result = updatePool(poolId, req.body);
     res.json(result);
   } catch (error) {
     console.error(`Error updating pool ${req.params.id}:`, error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
   }
 });
 
@@ -163,16 +163,16 @@ app.delete('/pool/:id', (req, res) => {
     const pools = loadPools();
     const pool = pools[poolId];
     if (!pool) {
-      return res.status(404).json({ error: 'Pool not found' });
+      return res.status(404).json({ error: 'Pool not found', code: 'POOL_NOT_FOUND' });
     }
     if (pool.creatorAddress !== creatorAddress) {
-      return res.status(403).json({ error: 'Unauthorized: You do not own this pool' });
+      return res.status(403).json({ error: 'Unauthorized: You do not own this pool', code: 'UNAUTHORIZED' });
     }
     const result = deletePool(poolId);
     res.json(result);
   } catch (error) {
     console.error(`Error deleting pool ${req.params.id}:`, error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
   }
 });
 
@@ -183,7 +183,7 @@ app.post('/create-pool', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Pool creation error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
   }
 });
 
@@ -194,7 +194,7 @@ app.post('/upload-wallet', upload.single('wallet'), async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Wallet upload error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
   }
 });
 
@@ -206,13 +206,13 @@ app.post('/upload', upload.single('zip'), async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Upload error:`, error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
   }
 });
 
 // Catch-all route to ensure JSON responses
 app.use((req, res) => {
-  res.status(404).json({ error: 'Not Found' });
+  res.status(404).json({ error: 'Not Found', code: 'NOT_FOUND' });
 });
 
 // Start the server with error handling

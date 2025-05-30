@@ -46,14 +46,14 @@ function validateUploadFiles(fileMetadata, tempDir) {
   }, 0);
 
   if (totalSize > 50 * 1024 * 1024) {
-    throw new Error('Total size exceeds 50 MB');
+    throw { code: 'TOTAL_SIZE_EXCEEDED', message: 'Total size exceeds 50 MB' };
   }
 
   const allowedExtensions = ['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg'];
   for (const file of fileMetadata) {
     const ext = extname(file.relativePath).toLowerCase();
     if (!allowedExtensions.includes(ext)) {
-      throw new Error(`Invalid file type: ${ext}`);
+      throw { code: 'INVALID_FILE_TYPE', message: `Invalid file type: ${ext}` };
     }
   }
 
@@ -68,7 +68,7 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
   for (const file of fileMetadata) {
     const filePath = join(tempDir, file.relativePath);
     if (!existsSync(filePath)) {
-      throw new Error(`File not found in zip: ${file.relativePath}`);
+      throw { code: 'FILE_NOT_FOUND_IN_ZIP', message: `File not found in zip: ${file.relativePath}` };
     }
     const fileStreamFactory = () => createReadStream(filePath);
     const fileSizeFactory = () => statSync(filePath).size;
@@ -107,9 +107,11 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
 function cleanupTempFiles(tempDir, zipPath) {
   if (existsSync(tempDir)) {
     rmSync(tempDir, { recursive: true, force: true });
+    console.log(`Cleaned up temporary directory: ${tempDir}`);
   }
   if (existsSync(zipPath)) {
     unlinkSync(zipPath);
+    console.log(`Deleted uploaded ZIP file: ${zipPath}`);
   }
 }
 
@@ -119,24 +121,24 @@ async function handleFileUpload(req) {
   const zipPath = req.file.path;
 
   if (!req.file) {
-    throw new Error('No ZIP file provided');
+    throw { code: 'NO_ZIP_FILE', message: 'No ZIP file provided' };
   }
 
   // Verify the hash matches the uploaded ZIP file
   const zipBuffer = readFileSync(zipPath);
   const calculatedHash = createHash('sha256').update(zipBuffer).digest('hex');
   if (calculatedHash !== zipHash) {
-    throw new Error('Hash mismatch');
+    throw { code: 'HASH_MISMATCH', message: 'Hash mismatch' };
   }
 
   // Verify the signature using ArweaveSignatureVerifier
   const verifier = new ArweaveSignatureVerifier();
   const verificationResult = await verifier.verifySignatureWithPublicKey(publicKey, signature, zipHash);
   if (!verificationResult.isValidSignature) {
-    throw new Error('Invalid signature');
+    throw { code: 'INVALID_SIGNATURE', message: 'Invalid signature' };
   }
   if (verificationResult.walletAddress !== walletAddress) {
-    throw new Error('Wallet address mismatch');
+    throw { code: 'WALLET_ADDRESS_MISMATCH', message: 'Wallet address mismatch' };
   }
 
   let sponsorWallet;
@@ -144,23 +146,23 @@ async function handleFileUpload(req) {
 
   if (poolType === 'event') {
     if (!eventPoolId) {
-      throw new Error('Event pool requires pool ID');
+      throw { code: 'MISSING_POOL_ID', message: 'Event pool requires pool ID' };
     }
     const pools = loadPools();
     const pool = pools[eventPoolId];
     if (!pool) {
-      throw new Error('Invalid pool ID');
+      throw { code: 'INVALID_POOL_ID', message: 'Invalid pool ID' };
     }
     const now = new Date().toISOString();
     if (now < pool.startTime || now > pool.endTime) {
-      throw new Error('Pool is not active');
+      throw { code: 'POOL_NOT_ACTIVE', message: 'Pool is not active' };
     }
     poolName = pool.name;
 
     // Check if derived address is in the whitelist
     const whitelist = pool.whitelist || [];
     if (!whitelist.includes(walletAddress)) {
-      throw new Error('Wallet address not in whitelist');
+      throw { code: 'WALLET_NOT_WHITELISTED', message: 'Wallet address not in whitelist' };
     }
 
     // Update pool usage
