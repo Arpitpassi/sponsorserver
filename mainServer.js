@@ -1,6 +1,6 @@
 import express, { json } from 'express';
 import multer from 'multer';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync } from 'fs';
 import cors from 'cors';
 
 // Import modules
@@ -130,6 +130,36 @@ app.get('/pool/:id/balance', async (req, res) => {
     res.json({ balance });
   } catch (error) {
     console.error(`Error fetching balance for pool ${req.params.id}:`, error);
+    res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
+  }
+});
+
+// Endpoint to get pool wallet
+app.get('/pool/:id/wallet', async (req, res) => {
+  try {
+    const poolId = req.params.id;
+    const creatorAddress = req.query.creatorAddress;
+    const pools = loadPools();
+    const pool = pools[poolId];
+    if (!pool) {
+      return res.status(404).json({ error: 'Pool not found', code: 'POOL_NOT_FOUND' });
+    }
+    if (pool.creatorAddress !== creatorAddress) {
+      return res.status(403).json({ error: 'Unauthorized: You do not own this pool', code: 'UNAUTHORIZED' });
+    }
+    const now = new Date();
+    const endTime = new Date(pool.endTime);
+    if (now <= endTime) {
+      return res.status(403).json({ error: 'Pool has not ended yet', code: 'POOL_NOT_ENDED' });
+    }
+    const walletPath = pool.walletPath;
+    if (!existsSync(walletPath)) {
+      return res.status(404).json({ error: 'Wallet file not found', code: 'WALLET_NOT_FOUND' });
+    }
+    const wallet = JSON.parse(readFileSync(walletPath, 'utf-8'));
+    res.json({ wallet });
+  } catch (error) {
+    console.error(`Error fetching wallet for pool ${req.params.id}:`, error);
     res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
   }
 });

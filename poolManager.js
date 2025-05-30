@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { TurboFactory, ArweaveSigner } from '@ardrive/turbo-sdk';
 import { fileURLToPath } from 'url';
+import Arweave from 'arweave';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const POOLS_FILE = path.join(__dirname, 'pools.json');
@@ -115,8 +116,9 @@ async function createPool(poolData) {
     throw { code: 'MISSING_FIELDS', message: 'Missing required fields' };
   }
 
-  const Arweave = require('arweave');
+  
   const arweave = Arweave.init({});
+
 
   let walletData;
   try {

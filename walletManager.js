@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-
+  import Arweave from 'arweave';
 
 const SPONSOR_DIR = path.join(process.env.HOME, '.nitya', 'sponsor');
 const SPONSOR_WALLET_DIR = path.join(SPONSOR_DIR, 'wallets');
@@ -32,7 +32,7 @@ function validateWalletFile(walletPath) {
 }
 
 async function getWalletAddress(walletData) {
-  const Arweave = require('arweave');
+
   const arweave = Arweave.init({});
   return await arweave.wallets.jwkToAddress(walletData);
 }
