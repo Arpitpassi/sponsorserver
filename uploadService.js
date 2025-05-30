@@ -1,11 +1,16 @@
+
 import { createReadStream, existsSync, statSync, readFileSync, rmSync, unlinkSync, mkdirSync } from 'fs';
-import { extname, join } from 'path';
+import { extname, join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { Extract } from 'unzipper';
 import { createHash } from 'crypto';
 import { TurboFactory, ArweaveSigner } from '@ardrive/turbo-sdk';
 import { loadPools, updatePoolUsage } from './poolManager.js';
 import { loadWalletFromPath, getRandomCommunityWallet } from './walletManager.js';
 import ArweaveSignatureVerifier from './arweaveSignatureVerifier.js';
+
+// Define __dirname for ES Modules
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Function to determine Content-Type based on file extension
 function getContentType(filePath) {
@@ -31,12 +36,16 @@ function getContentType(filePath) {
 }
 
 async function extractZipFile(zipPath, tempDir) {
-  await new Promise((resolve, reject) => {
-    createReadStream(zipPath)
-      .pipe(Extract({ path: tempDir }))
-      .on('close', resolve)
-      .on('error', reject);
-  });
+  try {
+    await new Promise((resolve, reject) => {
+      createReadStream(zipPath)
+        .pipe(Extract({ path: tempDir }))
+        .on('close', resolve)
+        .on('error', reject);
+    });
+  } catch (error) {
+    throw { code: 'ZIP_EXTRACT_FAILED', message: `Failed to extract ZIP file: ${error.message}` };
+  }
 }
 
 function validateUploadFiles(fileMetadata, tempDir) {
@@ -64,7 +73,18 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
   const signer = new ArweaveSigner(wallet);
   const turbo = TurboFactory.authenticated({ signer, token: 'arweave' });
 
+  // Get initial balance
+  let balanceResult;
+  try {
+    balanceResult = await turbo.getBalance();
+  } catch (error) {
+    throw { code: 'BALANCE_CHECK_FAILED', message: `Failed to check initial balance: ${error.message}` };
+  }
+  const initialBalance = BigInt(balanceResult.winc);
+
   const uploadedFiles = [];
+  let totalWincSpent = 0n;
+
   for (const file of fileMetadata) {
     const filePath = join(tempDir, file.relativePath);
     if (!existsSync(filePath)) {
@@ -75,113 +95,145 @@ async function uploadToArweave(fileMetadata, tempDir, wallet, poolType, poolName
     const hash = createHash('sha256').update(readFileSync(filePath)).digest('hex');
 
     console.log(`Uploading file: ${file.relativePath}`);
-    const uploadResult = await turbo.uploadFile({
-      fileStreamFactory,
-      fileSizeFactory,
-      dataItemOpts: {
-        tags: [
-          { name: 'App-Name', value: 'PermaDeploy' },
-          { name: 'anchor', value: new Date().toISOString() },
-          { name: 'Content-Type', value: file.contentType },
-          { name: 'Pool-Type', value: poolType },
-          ...(poolType === 'event' ? [{ name: 'Event-Name', value: poolName }] : [])
-        ],
-      },
-    });
+    try {
+      const uploadResult = await turbo.uploadFile({
+        fileStreamFactory,
+        fileSizeFactory,
+        dataItemOpts: {
+          tags: [
+            { name: 'App-Name', value: 'PermaDeploy' },
+            { name: 'anchor', value: new Date().toISOString() },
+            { name: 'Content-Type', value: file.contentType },
+            { name: 'Pool-Type', value: poolType },
+            ...(poolType === 'event' ? [{ name: 'Event-Name', value: poolName }] : [])
+          ],
+        },
+      });
 
-    uploadedFiles.push({
-      relativePath: file.relativePath,
-      txId: uploadResult.id,
-      hash,
-      lastModified: statSync(filePath).mtime.toISOString()
-    });
+      const wincSpent = BigInt(uploadResult.winc);
+      totalWincSpent += wincSpent;
+
+      uploadedFiles.push({
+        relativePath: file.relativePath,
+        txId: uploadResult.id,
+        hash,
+        lastModified: statSync(filePath).mtime.toISOString(),
+        winc: uploadResult.winc
+      });
+    } catch (error) {
+      throw { code: 'UPLOAD_FAILED', message: `Failed to upload file ${file.relativePath}: ${error.message}` };
+    }
   }
 
-  const balanceResult = await turbo.getBalance();
-  const remainingBalance = balanceResult.winc / 1e12;
-  const equivalentFileSize = (remainingBalance / 0.1) * 1024 * 1024;
+  // Get final balance to confirm
+  try {
+    balanceResult = await turbo.getBalance();
+  } catch (error) {
+    throw { code: 'BALANCE_CHECK_FAILED', message: `Failed to check final balance: ${error.message}` };
+  }
+  const remainingBalance = BigInt(balanceResult.winc) / BigInt(1e12);
+  const equivalentFileSize = (Number(remainingBalance) / 0.1) * 1024 * 1024;
 
-  return { uploadedFiles, remainingBalance, equivalentFileSize };
+  return {
+    uploadedFiles,
+    totalWincSpent: totalWincSpent.toString(),
+    remainingBalance: Number(remainingBalance),
+    equivalentFileSize
+  };
 }
 
 function cleanupTempFiles(tempDir, zipPath) {
-  if (existsSync(tempDir)) {
-    rmSync(tempDir, { recursive: true, force: true });
-    console.log(`Cleaned up temporary directory: ${tempDir}`);
+  try {
+    if (tempDir && existsSync(tempDir)) {
+      rmSync(tempDir, { recursive: true, force: true });
+      console.log(`Cleaned up temporary directory: ${tempDir}`);
+    }
+  } catch (error) {
+    console.error(`Failed to clean up temporary directory ${tempDir}:`, error);
   }
-  if (existsSync(zipPath)) {
-    unlinkSync(zipPath);
-    console.log(`Deleted uploaded ZIP file: ${zipPath}`);
+
+  try {
+    if (zipPath && existsSync(zipPath)) {
+      unlinkSync(zipPath);
+      console.log(`Deleted uploaded ZIP file: ${zipPath}`);
+    }
+  } catch (error) {
+    console.error(`Failed to delete ZIP file ${zipPath}:`, error);
   }
 }
 
 async function handleFileUpload(req) {
   const poolType = req.body.poolType || 'community';
   const { eventPoolId, zipHash, signature, publicKey, walletAddress } = req.body;
-  const zipPath = req.file.path;
+  const zipPath = req.file ? req.file.path : null;
 
-  if (!req.file) {
-    throw { code: 'NO_ZIP_FILE', message: 'No ZIP file provided' };
-  }
-
-  // Verify the hash matches the uploaded ZIP file
-  const zipBuffer = readFileSync(zipPath);
-  const calculatedHash = createHash('sha256').update(zipBuffer).digest('hex');
-  if (calculatedHash !== zipHash) {
-    throw { code: 'HASH_MISMATCH', message: 'Hash mismatch' };
-  }
-
-  // Verify the signature using ArweaveSignatureVerifier
-  const verifier = new ArweaveSignatureVerifier();
-  const verificationResult = await verifier.verifySignatureWithPublicKey(publicKey, signature, zipHash);
-  if (!verificationResult.isValidSignature) {
-    throw { code: 'INVALID_SIGNATURE', message: 'Invalid signature' };
-  }
-  if (verificationResult.walletAddress !== walletAddress) {
-    throw { code: 'WALLET_ADDRESS_MISMATCH', message: 'Wallet address mismatch' };
-  }
-
-  let sponsorWallet;
-  let poolName = '';
-
-  if (poolType === 'event') {
-    if (!eventPoolId) {
-      throw { code: 'MISSING_POOL_ID', message: 'Event pool requires pool ID' };
+  // Initialize tempDir early to ensure cleanup
+  const tempDir = zipPath ? join(__dirname, 'temp', Date.now().toString()) : null;
+  if (tempDir) {
+    try {
+      mkdirSync(tempDir, { recursive: true });
+      console.log(`Created temporary directory: ${tempDir}`);
+    } catch (error) {
+      cleanupTempFiles(tempDir, zipPath);
+      throw { code: 'TEMP_DIR_CREATION_FAILED', message: `Failed to create temporary directory: ${error.message}` };
     }
-    const pools = loadPools();
-    const pool = pools[eventPoolId];
-    if (!pool) {
-      throw { code: 'INVALID_POOL_ID', message: 'Invalid pool ID' };
-    }
-    const now = new Date().toISOString();
-    if (now < pool.startTime || now > pool.endTime) {
-      throw { code: 'POOL_NOT_ACTIVE', message: 'Pool is not active' };
-    }
-    poolName = pool.name;
-
-    // Check if derived address is in the whitelist
-    const whitelist = pool.whitelist || [];
-    if (!whitelist.includes(walletAddress)) {
-      throw { code: 'WALLET_NOT_WHITELISTED', message: 'Wallet address not in whitelist' };
-    }
-
-    // Update pool usage
-    const totalSize = statSync(zipPath).size;
-    const estimatedCost = totalSize / (1024 * 1024) * 0.1;
-    updatePoolUsage(eventPoolId, walletAddress, estimatedCost, pool);
-
-    sponsorWallet = loadWalletFromPath(pool.walletPath);
-  } else {
-    // For community pools, use a random wallet (no whitelist check needed)
-    sponsorWallet = getRandomCommunityWallet();
   }
-
-  console.log(`Using wallet for ${poolType} pool`);
-
-  const tempDir = join(__dirname, 'temp', Date.now().toString());
-  mkdirSync(tempDir, { recursive: true });
 
   try {
+    if (!req.file || !zipPath) {
+      throw { code: 'NO_ZIP_FILE', message: 'No ZIP file provided' };
+    }
+
+    // Verify the hash matches the uploaded ZIP file
+    const zipBuffer = readFileSync(zipPath);
+    const calculatedHash = createHash('sha256').update(zipBuffer).digest('hex');
+    if (calculatedHash !== zipHash) {
+      throw { code: 'HASH_MISMATCH', message: 'Hash mismatch' };
+    }
+
+    // Verify the signature using ArweaveSignatureVerifier
+    const verifier = new ArweaveSignatureVerifier();
+    const verificationResult = await verifier.verifySignatureWithPublicKey(publicKey, signature, zipHash);
+    if (!verificationResult.isValidSignature) {
+      throw { code: 'INVALID_SIGNATURE', message: 'Invalid signature' };
+    }
+    if (verificationResult.walletAddress !== walletAddress) {
+      throw { code: 'WALLET_ADDRESS_MISMATCH', message: 'Wallet address mismatch' };
+    }
+
+    let sponsorWallet;
+    let poolName = '';
+    let pool;
+
+    if (poolType === 'event') {
+      if (!eventPoolId) {
+        throw { code: 'MISSING_POOL_ID', message: 'Event pool requires pool ID' };
+      }
+      const pools = loadPools();
+      pool = pools[eventPoolId];
+      if (!pool) {
+        throw { code: 'INVALID_POOL_ID', message: 'Invalid pool ID' };
+      }
+      const now = new Date().toISOString();
+      if (now < pool.startTime || now > pool.endTime) {
+        throw { code: 'POOL_NOT_ACTIVE', message: 'Pool is not active' };
+      }
+      poolName = pool.name;
+
+      // Check if derived address is in the whitelist
+      const whitelist = pool.whitelist || [];
+      if (!whitelist.includes(walletAddress)) {
+        throw { code: 'WALLET_NOT_WHITELISTED', message: 'Wallet address not in whitelist' };
+      }
+
+      sponsorWallet = loadWalletFromPath(pool.walletPath);
+    } else {
+      // For community pools, use a random wallet (no whitelist check needed)
+      sponsorWallet = getRandomCommunityWallet();
+    }
+
+    console.log(`Using wallet for ${poolType} pool`);
+
     await extractZipFile(zipPath, tempDir);
     
     const fileMetadata = JSON.parse(req.body.fileMetadata || '[]');
@@ -189,12 +241,18 @@ async function handleFileUpload(req) {
     
     const result = await uploadToArweave(fileMetadata, tempDir, sponsorWallet, poolType, poolName);
     
+    // Update pool usage for event pools using actual winc spent
+    if (poolType === 'event') {
+      updatePoolUsage(eventPoolId, walletAddress, Number(result.totalWincSpent) / 1e12, pool);
+    }
+
     return {
       poolType,
       uploadedFiles: result.uploadedFiles,
       poolName: poolType === 'event' ? `You have been sponsored by ${poolName}` : undefined,
       remainingBalance: result.remainingBalance,
-      equivalentFileSize: result.equivalentFileSize
+      equivalentFileSize: result.equivalentFileSize,
+      totalCreditsSpent: result.totalWincSpent
     };
   } finally {
     cleanupTempFiles(tempDir, zipPath);
