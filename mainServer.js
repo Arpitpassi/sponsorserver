@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync } from 'fs';
 import cors from 'cors';
 
 // Import modules
-import { POOL_WALLETS_DIR, POOLS_FILE, loadPools, getPoolBalance, updatePool, deletePool, createPool } from './poolManager.js';
+import { POOL_WALLETS_DIR, POOLS_FILE, loadPools, getPoolBalance, updatePool,createPool } from './poolManager.js';
 import { SPONSOR_WALLET_DIR, uploadWallet } from './walletManager.js';
 import { handleFileUpload } from './uploadService.js';
 
@@ -14,7 +14,7 @@ const upload = multer({ dest: 'uploads/' });
 // Enable CORS
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST', 'OPTIONS', 'PATCH', 'DELETE'],
+  methods: ['GET', 'POST', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'X-API-Key', 'X-Event-Pool-Id']
 }));
 app.use(json()); // Add JSON body parser
@@ -185,26 +185,7 @@ app.patch('/pool/:id', (req, res) => {
   }
 });
 
-// Endpoint to delete a pool
-app.delete('/pool/:id', (req, res) => {
-  try {
-    const poolId = req.params.id;
-    const creatorAddress = req.query.creatorAddress;
-    const pools = loadPools();
-    const pool = pools[poolId];
-    if (!pool) {
-      return res.status(404).json({ error: 'Pool not found', code: 'POOL_NOT_FOUND' });
-    }
-    if (pool.creatorAddress !== creatorAddress) {
-      return res.status(403).json({ error: 'Unauthorized: You do not own this pool', code: 'UNAUTHORIZED' });
-    }
-    const result = deletePool(poolId);
-    res.json(result);
-  } catch (error) {
-    console.error(`Error deleting pool ${req.params.id}:`, error);
-    res.status(500).json({ error: error.message, code: error.code || 'UNKNOWN_ERROR' });
-  }
-});
+
 
 // Endpoint to create a new event pool
 app.post('/create-pool', async (req, res) => {

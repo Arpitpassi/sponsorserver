@@ -55,7 +55,8 @@ function validateUploadFiles(fileMetadata, tempDir) {
     throw { code: 'TOTAL_SIZE_EXCEEDED', message: 'Total size exceeds 50 MB' };
   }
 
-  const allowedExtensions = ['.html', '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg'];
+  const allowedExtensions = ['.html', '.css', '.js', '.json', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.txt', '.pdf', '.woff', '.woff2', '.ttf'];
+
   for (const file of fileMetadata) {
     const ext = extname(file.relativePath).toLowerCase();
     if (!allowedExtensions.includes(ext)) {

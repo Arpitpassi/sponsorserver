@@ -87,28 +87,8 @@ function updatePool(poolId, updates) {
   return { message: 'Pool updated successfully' };
 }
 
-function deletePool(poolId) {
-  const pools = loadPools();
-  if (!pools[poolId]) {
-    throw { code: 'POOL_NOT_FOUND', message: 'Pool not found' };
-  }
 
-  const walletPath = pools[poolId].walletPath;
-  if (fs.existsSync(walletPath)) {
-    try {
-      fs.unlinkSync(walletPath);
-      console.log(`Deleted wallet file: ${walletPath}`);
-    } catch (error) {
-      console.error(`Error deleting wallet file ${walletPath}:`, error);
-      throw { code: 'WALLET_DELETE_FAILED', message: `Failed to delete wallet file: ${error.message}` };
-    }
-  }
-
-  delete pools[poolId];
-  savePools(pools);
-  return { message: 'Pool deleted successfully' };
-}
-
+// poolManager.js - Updated createPool function
 async function createPool(poolData) {
   console.log('Received /create-pool request');
   const { name, startTime, endTime, usageCap, whitelist, creatorAddress } = poolData;
@@ -116,10 +96,14 @@ async function createPool(poolData) {
     throw { code: 'MISSING_FIELDS', message: 'Missing required fields' };
   }
 
-  
+  const pools = loadPools();
+  // Check pool limit for the creatorAddress
+  const existingPools = Object.values(pools).filter(pool => pool.creatorAddress === creatorAddress);
+  if (existingPools.length >= 3) {
+    throw { code: 'POOL_LIMIT_EXCEEDED', message: 'Maximum of 3 pools per wallet exceeded' };
+  }
+
   const arweave = Arweave.init({});
-
-
   let walletData;
   try {
     walletData = await arweave.wallets.generate();
@@ -128,9 +112,7 @@ async function createPool(poolData) {
   }
   const walletAddress = await arweave.wallets.jwkToAddress(walletData);
 
-  const pools = loadPools();
   const poolId = crypto.randomBytes(16).toString('hex');
-  
   const walletPath = path.join(POOL_WALLETS_DIR, `${poolId}.json`);
   try {
     fs.writeFileSync(walletPath, JSON.stringify(walletData, null, 2));
@@ -191,7 +173,6 @@ export {
   savePools,
   getPoolBalance,
   updatePool,
-  deletePool,
   createPool,
   validateEventPoolAccess,
   updatePoolUsage,
